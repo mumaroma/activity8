@@ -1,0 +1,459 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Play, Pause, RotateCcw, Monitor, Smartphone, Eye, EyeOff } from 'lucide-react';
+
+export default function MotionSimulator() {
+  // --- 1. 파라미터 및 환경 설정 상태 ---
+  const [maxTime, setMaxTime] = useState(10);
+  const [minPos, setMinPos] = useState(-5);
+  const [maxPos, setMaxPos] = useState(15);
+  const [intervalTime, setIntervalTime] = useState(0.5);
+  const [isDesktopLayout, setIsDesktopLayout] = useState(true);
+  const [showTrace, setShowTrace] = useState(true);
+
+  // --- 2. 운동 객체 상태 (초기 위치, 종료 위치) ---
+  const [motion1, setMotion1] = useState({ start: 0, end: 10 });
+  const [motion2, setMotion2] = useState({ start: 4, end: 4 });
+
+  // --- 3. 애니메이션 제어 상태 ---
+  const [currentTime, setCurrentTime] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  // --- 4. 드래그 관련 참조 및 상태 ---
+  const [dragging, setDragging] = useState(null); // { target: 'motion1'|'motion2', type: 'start'|'end' }
+  const graphSvgRef = useRef(null);
+  const requestRef = useRef(null);
+  const previousTimeRef = useRef(null);
+
+  // --- SVG ViewBox 규격 ---
+  const traceView = { width: 700, height: 300 };
+  const graphView = { width: 700, height: 350 };
+  const graphPadding = { top: 40, right: 40, bottom: 50, left: 60 };
+
+  // --- 5. 선형 보간 위치 계산 함수 (수학·과학 규칙) ---
+  const getPosition = (t, start, end) => {
+    if (t <= 0) return start;
+    if (t >= maxTime) return end;
+    return start + ((end - start) / maxTime) * t;
+  };
+
+  // --- 6. 좌표 변환 헬퍼 함수 ---
+  const getGraphCoords = (t, pos) => {
+    const { top, right, bottom, left } = graphPadding;
+    const graphWidth = graphView.width - left - right;
+    const graphHeight = graphView.height - top - bottom;
+
+    const x = left + (t / maxTime) * graphWidth;
+    const y = bottom + ((pos - minPos) / (maxPos - minPos)) * graphHeight;
+    return { x, y: graphView.height - y }; // SVG Y축 반전 반영
+  };
+
+  const getInverseCoords = (svgX, svgY) => {
+    const { top, right, bottom, left } = graphPadding;
+    const graphWidth = graphView.width - left - right;
+    const graphHeight = graphView.height - top - bottom;
+
+    const t = ((svgX - left) / graphWidth) * maxTime;
+    const invertedY = graphView.height - svgY;
+    const pos = minPos + ((invertedY - bottom) / graphHeight) * (maxPos - minPos);
+    return { t, pos };
+  };
+
+  // --- 7. 애니메이션 루프 (requestAnimationFrame - 실제 시간의 2배속) ---
+  useEffect(() => {
+    const animate = (time) => {
+      if (previousTimeRef.current !== undefined) {
+        const deltaTime = (time - previousTimeRef.current) / 1000; // 초 단위
+        const speedMultiplier = 2.0; // 2배속 재생 구동 규칙
+        
+        setCurrentTime((prev) => {
+          const next = prev + deltaTime * speedMultiplier;
+          if (next >= maxTime) {
+            setIsPlaying(false);
+            return maxTime;
+          }
+          return next;
+        });
+      }
+      previousTimeRef.current = time;
+      if (isPlaying) {
+        requestRef.current = requestAnimationFrame(animate);
+      }
+    };
+
+    if (isPlaying) {
+      requestRef.current = requestAnimationFrame(animate);
+    } else {
+      previousTimeRef.current = undefined;
+    }
+    return () => cancelAnimationFrame(requestRef.current);
+  }, [isPlaying, maxTime]);
+
+  // --- 8. 드래그 및 터치 이벤트 핸들러 ---
+  const handlePointerDown = (e, target, type) => {
+    if (isPlaying) return; // 재생 중 드래그 비활성화 규칙
+    e.preventDefault();
+    setDragging({ target, type });
+  };
+
+  useEffect(() => {
+    const handlePointerMove = (e) => {
+      if (!dragging || !graphSvgRef.current) return;
+
+      const rect = graphSvgRef.current.getBoundingClientRect();
+      // 터치 및 마우스 포인터 추출 기본 처리
+      const clientX = e.clientX || (e.touches && e.touches[0].clientX);
+      const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+
+      if (!clientX || !clientY) return;
+
+      // SVG 내부 상대 좌표 변환
+      const svgX = ((clientX - rect.left) / rect.width) * graphView.width;
+      const svgY = ((clientY - rect.top) / rect.height) * graphView.height;
+
+      let { pos } = getInverseCoords(svgX, svgY);
+      // 안전 한계값 가둠 처리
+      pos = Math.max(minPos, Math.min(maxPos, Math.round(pos * 10) / 10));
+
+      // 값 업데이트 및 즉시 초기화(Reset)
+      setCurrentTime(0);
+      if (dragging.target === 'motion1') {
+        setMotion1((prev) => ({ ...prev, [dragging.type]: pos }));
+      } else {
+        setMotion2((prev) => ({ ...prev, [dragging.type]: pos }));
+      }
+    };
+
+    const handlePointerUp = () => {
+      setDragging(null);
+    };
+
+    if (dragging) {
+      window.addEventListener('pointermove', handlePointerMove);
+      window.addEventListener('pointerup', handlePointerUp);
+      window.addEventListener('touchmove', handlePointerMove, { passive: false });
+      window.addEventListener('touchend', handlePointerUp);
+    }
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('touchmove', handlePointerMove);
+      window.removeEventListener('touchend', handlePointerUp);
+    };
+  }, [dragging, minPos, maxPos]);
+
+  // --- 9. 샘플링 데이터 바인딩 (자취 및 데이터 테이블 공용) ---
+  const getSampledData = () => {
+    const data = [];
+    for (let t = 0; t <= currentTime; t = Math.round((t + intervalTime) * 100) / 100) {
+      data.push({
+        time: t,
+        p1: getPosition(t, motion1.start, motion1.end),
+        p2: getPosition(t, motion2.start, motion2.end),
+      });
+    }
+    // 최종 타임 도달 시 예외 종결점 추가 처리
+    if (currentTime === maxTime && (data.length === 0 || data[data.length - 1].time !== maxTime)) {
+      data.push({
+        time: maxTime,
+        p1: motion1.end,
+        p2: motion2.end,
+      });
+    }
+    return data;
+  };
+
+  const sampledData = getSampledData();
+  const currentP1 = getPosition(currentTime, motion1.start, motion1.end);
+  const currentP2 = getPosition(currentTime, motion2.start, motion2.end);
+
+  // --- 수직선 트랙 내부 매핑 스케일 함수 ---
+  const getTraceX = (pos) => {
+    const margin = 50;
+    const trackWidth = traceView.width - margin * 2;
+    return margin + ((pos - minPos) / (maxPos - minPos)) * trackWidth;
+  };
+
+  return (
+    <div className="min-h-screen w-full bg-gradient-to-tr from-blue-900 via-purple-900 to-pink-900 p-4 md:p-8 text-slate-800">
+      <div className="mx-auto max-w-7xl space-y-6">
+        
+        {/* 헤더 및 전역 파라미터 세팅 */}
+        <header className="flex flex-col lg:flex-row items-center justify-between bg-white/90 backdrop-blur-md p-6 rounded-2xl shadow-xl gap-4">
+          <div>
+            <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900">두 운동 비교하기 시뮬레이션</h1>
+            <p className="text-sm text-slate-600 mt-1">DMTG(동적 자취 토큰)와 위치-시간 그래프 스케일 동기화 탐구</p>
+          </div>
+          
+          <div className="flex flex-wrap items-center gap-4 text-sm font-semibold">
+            <div className="flex items-center gap-2">
+              <span>최대 시간:</span>
+              <input type="number" min="1" max="20" value={maxTime} onChange={(e) => { setMaxTime(Number(e.target.value)); setCurrentTime(0); }} className="w-16 p-1 border rounded text-center bg-slate-50"/><span>초</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span>위치 범위:</span>
+              <input type="number" value={minPos} onChange={(e) => { setMinPos(Number(e.target.value)); setCurrentTime(0); }} className="w-16 p-1 border rounded text-center bg-slate-50"/><span>m ~</span>
+              <input type="number" value={maxPos} onChange={(e) => { setMaxPos(Number(e.target.value)); setCurrentTime(0); }} className="w-16 p-1 border rounded text-center bg-slate-50"/><span>m</span>
+            </div>
+            <button onClick={() => setIsDesktopLayout(!isDesktopLayout)} className="flex items-center gap-2 bg-slate-200 px-4 py-2 rounded-lg hover:bg-slate-300 transition">
+              {isDesktopLayout ? <Smartphone size={16} /> : <Monitor size={16} />}
+              {isDesktopLayout ? "모바일 세로보기" : "데스크탑 가로보기"}
+            </button>
+          </div>
+        </header>
+
+        {/* 메인 컴포넌트 뷰 레이아웃 분기 */}
+        <div className={`grid gap-6 ${isDesktopLayout ? 'grid-cols-1 lg:grid-cols-12' : 'grid-cols-1'}`}>
+          
+          {/* 가로/세로 동적 분할 제어 왼쪽/상단 영역 */}
+          <div className={`${isDesktopLayout ? 'lg:col-span-7' : 'w-full'} space-y-6`}>
+            
+            {/* PANEL 1: 동적 자취 (DMTG) */}
+            <div className="bg-white p-6 rounded-2xl shadow-2xl relative">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                  📍 동적 자취 트랙 (Dynamic Motion Trace)
+                </h2>
+                <button onClick={() => setShowTrace(!showTrace)} className="flex items-center gap-1.5 text-xs font-bold text-slate-600 bg-slate-100 px-2.5 py-1.5 rounded-md hover:bg-slate-200">
+                  {showTrace ? <EyeOff size={14} /> : <Eye size={14} />}
+                  {showTrace ? "자취 숨기기" : "자취 보이기"}
+                </button>
+              </div>
+
+              <svg viewBox={`0 0 ${traceView.width} ${traceView.height}`} className="w-full h-auto bg-slate-50 rounded-xl border border-slate-100">
+                {/* 수직선 축 그리드 구성 */}
+                {[100, 200].map((y, idx) => (
+                  <g key={y}>
+                    <line x1={getTraceX(minPos)} y1={y} x2={getTraceX(maxPos)} y2={y} stroke="#cbd5e1" strokeWidth="2" />
+                    {/* 눈금선 매핑 */}
+                    {Array.from({ length: maxPos - minPos + 1 }).map((_, i) => {
+                      const currP = minPos + i;
+                      const x = getTraceX(currP);
+                      const isZero = currP === 0;
+                      return (
+                        <g key={i}>
+                          <line x1={x} y1={y - 6} x2={x} y2={y + 6} stroke={isZero ? "#000" : "#94a3b8"} strokeWidth={isZero ? "3" : "1.5"} />
+                          {idx === 0 && (
+                            <text x={x} y={y - 12} textAnchor="middle" fontSize="11" fontWeight={isZero ? "bold" : "normal"} fill={isZero ? "#000" : "#64748b"}>
+                              {currP}m
+                            </text>
+                          )}
+                        </g>
+                      );
+                    })}
+                    <text x={20} y={y + 5} fontSize="13" fontWeight="bold" fill={idx === 0 ? "#ef4444" : "#3b82f6"}>
+                      운동 {idx + 1}
+                    </text>
+                  </g>
+                ))}
+
+                {/* 실시간 이산 샘플링 자취 마커 */}
+                {showTrace && sampledData.map((d, i) => (
+                  <g key={i}>
+                    <circle cx={getTraceX(d.p1)} cy="100" r="6" fill="#ef4444" opacity="0.35" />
+                    <circle cx={getTraceX(d.p2)} cy="200" r="6" fill="#3b82f6" opacity="0.35" />
+                  </g>
+                ))}
+
+                {/* 현재 시점 실시간 지배 객체 원 */}
+                <circle cx={getTraceX(currentP1)} cy="100" r="12" fill="#ef4444" className="drop-shadow-md" />
+                <circle cx={getTraceX(currentP2)} cy="200" r="12" fill="#3b82f6" className="drop-shadow-md" />
+              </svg>
+            </div>
+
+            {/* PANEL 2: 위치-시간 그래프 */}
+            <div className="bg-white p-6 rounded-2xl shadow-2xl">
+              <h2 className="text-lg font-bold text-slate-900 mb-2">📈 위치 - 시간 그래프</h2>
+              <p className="text-xs text-amber-600 font-semibold mb-4">※ 정지 상태에서 양 끝 단의 대형 원 핸들을 위아래로 드래그해 규칙을 변경하세요.</p>
+              
+              <svg ref={graphSvgRef} viewBox={`0 0 ${graphView.width} ${graphView.height}`} className="w-full h-auto bg-slate-50 rounded-xl border border-slate-100 select-none overflow-visible" style={{ touchAction: 'none' }}>
+                
+                {/* 내부 격자망 드로잉 */}
+                {(() => {
+                  const elements = [];
+                  const { top, right, bottom, left } = graphPadding;
+                  const graphWidth = graphView.width - left - right;
+                  const graphHeight = graphView.height - top - bottom;
+
+                  // 1초 단위 세로 격자
+                  for (let t = 0; t <= maxTime; t += 1) {
+                    const { x } = getGraphCoords(t, minPos);
+                    elements.push(
+                      <g key={`v-${t}`}>
+                        <line x1={x} y1={top} x2={x} y2={graphView.height - bottom} stroke="#e2e8f0" strokeWidth="1" />
+                        <text x={x} y={graphView.height - bottom + 18} textAnchor="middle" fontSize="11" fill="#64748b">{t}s</text>
+                      </g>
+                    );
+                  }
+                  // 2m 단위 가로 격자 
+                  for (let p = Math.ceil(minPos/2)*2; p <= maxPos; p += 2) {
+                    const { y } = getGraphCoords(0, p);
+                    const isZero = p === 0;
+                    elements.push(
+                      <g key={`h-${p}`}>
+                        <line x1={left} y1={y} x2={graphView.width - right} y2={y} stroke={isZero ? "#475569" : "#e2e8f0"} strokeWidth={isZero ? "2" : "1"} />
+                        <text x={left - 10} y={y + 4} textAnchor="end" fontSize="11" fontWeight={isZero ? "bold" : "normal"} fill={isZero ? "#090d16" : "#64748b"}>{p}m</text>
+                      </g>
+                    );
+                  }
+                  return elements;
+                })()}
+
+                {/* 전체 운동 가이드 방향 백그라운드 레이선 */}
+                {(() => {
+                  const p1Start = getGraphCoords(0, motion1.start);
+                  const p1End = getGraphCoords(maxTime, motion1.end);
+                  const p2Start = getGraphCoords(0, motion2.start);
+                  const p2End = getGraphCoords(maxTime, motion2.end);
+                  return (
+                    <>
+                      <line x1={p1Start.x} y1={p1Start.y} x2={p1End.x} y2={p1End.y} stroke="#fca5a5" strokeWidth="2" strokeDasharray="4 4" />
+                      <line x1={p2Start.x} y1={p2Start.y} x2={p2End.x} y2={p2End.y} stroke="#93c5fd" strokeWidth="2" strokeDasharray="4 4" />
+                    </>
+                  );
+                })()}
+
+                {/* 샘플 시점 매칭 차트 누적 노드 점 */}
+                {showTrace && sampledData.map((d, i) => {
+                  const c1 = getGraphCoords(d.time, d.p1);
+                  const c2 = getGraphCoords(d.time, d.p2);
+                  return (
+                    <g key={i}>
+                      <circle cx={c1.x} cy={c1.y} r="5" fill="#ef4444" />
+                      <circle cx={c2.x} cy={c2.y} r="5" fill="#3b82f6" />
+                    </g>
+                  );
+                })}
+
+                {/* 현재 시점 실시간 위치 트래커 마커 (펄스 링 내포) */}
+                {(() => {
+                  const c1 = getGraphCoords(currentTime, currentP1);
+                  const c2 = getGraphCoords(currentTime, currentP2);
+                  return (
+                    <>
+                      <g className="animate-ping" style={{ transformOrigin: `${c1.x}px ${c1.y}px` }}>
+                        <circle cx={c1.x} cy={c1.y} r="10" fill="#ef4444" opacity="0.4"/>
+                      </g>
+                      <circle cx={c1.x} cy={c1.y} r="7" fill="#ef4444" stroke="#fff" strokeWidth="2" />
+                      
+                      <g className="animate-ping" style={{ transformOrigin: `${c2.x}px ${c2.y}px` }}>
+                        <circle cx={c2.x} cy={c2.y} r="10" fill="#3b82f6" opacity="0.4"/>
+                      </g>
+                      <circle cx={c2.x} cy={c2.y} r="7" fill="#3b82f6" stroke="#fff" strokeWidth="2" />
+                    </>
+                  );
+                })()}
+
+                {/* 인트랙티브 제어 구조 드래그 핸들 노드 (t=0, t=maxTime 전용) */}
+                {!isPlaying && (() => {
+                  const h1S = getGraphCoords(0, motion1.start);
+                  const h1E = getGraphCoords(maxTime, motion1.end);
+                  const h2S = getGraphCoords(0, motion2.start);
+                  const h2E = getGraphCoords(maxTime, motion2.end);
+
+                  return (
+                    <g style={{ cursor: 'ns-resize' }}>
+                      {/* 운동 1 시작 핸들 */}
+                      <circle cx={h1S.x} cy={h1S.y} r="30" fill="transparent" onPointerDown={(e) => handlePointerDown(e, 'motion1', 'start')} />
+                      <circle cx={h1S.x} cy={h1S.y} r="13" fill="#ef4444" stroke="#fff" strokeWidth="3" className="shadow" pointerEvents="none"/>
+                      
+                      {/* 운동 1 종료 핸들 */}
+                      <circle cx={h1E.x} cy={h1E.y} r="30" fill="transparent" onPointerDown={(e) => handlePointerDown(e, 'motion1', 'end')} />
+                      <circle cx={h1E.x} cy={h1E.y} r="13" fill="#ef4444" stroke="#fff" strokeWidth="3" className="shadow" pointerEvents="none"/>
+
+                      {/* 운동 2 시작 핸들 */}
+                      <circle cx={h2S.x} cy={h2S.y} r="30" fill="transparent" onPointerDown={(e) => handlePointerDown(e, 'motion2', 'start')} />
+                      <circle cx={h2S.x} cy={h2S.y} r="13" fill="#3b82f6" stroke="#fff" strokeWidth="3" className="shadow" pointerEvents="none"/>
+
+                      {/* 운동 2 종료 핸들 */}
+                      <circle cx={h2E.x} cy={h2E.y} r="30" fill="transparent" onPointerDown={(e) => handlePointerDown(e, 'motion2', 'end')} />
+                      <circle cx={h2E.x} cy={h2E.y} r="13" fill="#3b82f6" stroke="#fff" strokeWidth="3" className="shadow" pointerEvents="none"/>
+                    </g>
+                  );
+                })()}
+              </svg>
+            </div>
+          </div>
+
+          {/* 가로/세로 동적 분할 제어 오른쪽/하단 영역 */}
+          <div className={`${isDesktopLayout ? 'lg:col-span-5' : 'w-full'} flex flex-col gap-6`}>
+            
+            {/* 컨트롤러 박스 패널 */}
+            <div className="bg-white p-6 rounded-2xl shadow-2xl space-y-4">
+              <h2 className="text-lg font-bold text-slate-900">⏱️ 제어 및 파라미터</h2>
+              
+              {/* 자취 세그먼트 버튼 토글 */}
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-700">자취 샘플링 시간 간격:</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[0.2, 0.5, 1.0].map((val) => (
+                    <button key={val} onClick={() => { setIntervalTime(val); setCurrentTime(0); }} className={`py-2 text-sm font-extrabold rounded-xl border transition ${intervalTime === val ? 'bg-yellow-500 text-slate-950 border-yellow-600 shadow-inner' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
+                      {val}초 간격
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 현재 상태 정보 창 */}
+              <div className="bg-slate-900 text-emerald-400 p-4 rounded-xl font-mono text-base space-y-1">
+                <div>&gt; CURRENT TIME: <span className="text-white font-bold">{currentTime.toFixed(2)}s</span> / {maxTime}s</div>
+                <div>&gt; OBJ 1 POS : <span className="text-red-400 font-bold">{currentP1.toFixed(2)}m</span></div>
+                <div>&gt; OBJ 2 POS : <span className="text-blue-400 font-bold">{currentP2.toFixed(2)}m</span></div>
+              </div>
+
+              {/* 핵심 액션 트리거 버튼 셋 */}
+              <div className="flex gap-4">
+                <button onClick={() => setIsPlaying(!isPlaying)} className={`flex-1 flex items-center justify-center gap-2 py-3 px-6 rounded-xl font-bold text-white shadow-lg transition-all ${isPlaying ? 'bg-amber-500 hover:bg-amber-600' : 'bg-emerald-600 hover:bg-emerald-700'}`}>
+                  {isPlaying ? <Pause size={18} /> : <Play size={18} />}
+                  {isPlaying ? "일시정지" : "애니메이션 시작"}
+                </button>
+                <button onClick={() => { setCurrentTime(0); setIsPlaying(false); }} className="flex items-center justify-center bg-slate-700 hover:bg-slate-800 text-white font-bold px-5 py-3 rounded-xl transition shadow-lg">
+                  <RotateCcw size={18} className="mr-1" />
+                  다시하기
+                </button>
+              </div>
+            </div>
+
+            {/* PANEL 3: 데이터 테이블 패널 (실시간 누적 동기화 구조) */}
+            <div className="bg-white p-6 rounded-2xl shadow-2xl flex-1 flex flex-col min-h-[300px] max-h-[500px]">
+              <h2 className="text-lg font-bold text-slate-900 mb-3">📊 실험 데이터 기록 테이블</h2>
+              
+              <div className="overflow-y-auto border border-slate-200 rounded-xl flex-1 text-sm">
+                <table className="w-full text-center border-collapse">
+                  <thead className="bg-slate-100 sticky top-0 font-bold shadow-sm z-10">
+                    <tr className="text-slate-700 border-b border-slate-200">
+                      <th className="p-2.5 border-r">시간(s)</th>
+                      <th className="p-2.5 text-red-600 border-r">운동 1 위치(m)</th>
+                      <th className="p-2.5 text-blue-600">운동 2 위치(m)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-mono">
+                    {sampledData.map((row, idx) => {
+                      // 현재 시점 타임 인덱스 실시간 강조 판정 조건문 
+                      const isLast = idx === sampledData.length - 1;
+                      const isCurrentRow = isLast && isPlaying;
+                      return (
+                        <tr key={idx} className={`transition ${isCurrentRow ? 'bg-yellow-100 font-bold text-slate-950 animate-pulse' : 'hover:bg-slate-50'}`}>
+                          <td className="p-2 border-r text-slate-500">{row.time.toFixed(1)}</td>
+                          <td className="p-2 border-r text-red-700 font-semibold">{row.p1.toFixed(2)}</td>
+                          <td className="p-2 text-blue-700 font-semibold">{row.p2.toFixed(2)}</td>
+                        </tr>
+                      );
+                    })}
+                    {sampledData.length === 0 && (
+                      <tr>
+                        <td colSpan="3" className="p-8 text-slate-400 italic font-sans">애니메이션을 시작하면 기록이 누적됩니다.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+}
